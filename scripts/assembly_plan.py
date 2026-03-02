@@ -126,7 +126,7 @@ class AssemblyAllocator(Node):
                 sup_brick.pickup_pose = gui_brick.pickup_pose 
                 sup_brick.place_pose = gui_brick.place_pose 
 
-                sup_brick.start_side = "ABB" if gui_brick.location == 1 else "AR4"
+                sup_brick.start_side = "ABB" if gui_brick.location == 0 else "AR4"
                 sup_brick.target_side = "SHARED"
                 
                 final_plan.append(sup_brick)
@@ -183,13 +183,13 @@ class AssemblyAllocator(Node):
                 # Match Type AND Side (if side requirement exists)
                 type_matches = (source.type == target_enum_type)
                 side_matches = (required_side is None or source.side == required_side)
-
+                self.get_logger().info(f"Checking Camera Brick ID {source.id} (Type {source.type}, Side {source.side}) against GUI Target Type {target_enum_type} requiring side {required_side}")
                 if type_matches and side_matches:
                     target.id = str(source.id)   
 
                     abb_pose = self.transform_pose_to_abb(source)
 
-                    # self.get_logger().info(f"abb pose: position x={abb_pose.position.x}, y={abb_pose.position.y}")
+                    self.get_logger().info(f"abb pose: position x={abb_pose.position.x}, y={abb_pose.position.y}")
                     if abb_pose is None:
                         all_matched = False
                         break
@@ -198,10 +198,11 @@ class AssemblyAllocator(Node):
 
                     # Map side back to location integer for the internal plan
                     if source.side == CamBrick.ABB:
-                        target.location = 1
+                        target.location = 0
                     elif source.side == CamBrick.AR4:
-                        target.location = 2
+                        target.location = 1
 
+                    # self.get_logger().info(f"MATCH FOUND: GUI Target {target.type} at X={target.place_pose.position.x} matched with Camera Brick ID {source.id} on side {source.side}")
                     temp_plan.append(target)
                     supply_pool.pop(idx)
                     match_found = True
@@ -209,6 +210,7 @@ class AssemblyAllocator(Node):
 
             if not match_found:
                 # If no brick matches both type and the X-zone requirement
+                self.get_logger().info(f"No match for GUI Target: Type {target.type} at X={target.place_pose.position.x}")
                 all_matched = False
 
         # System is only ready if EVERY brick from the GUI has a physical match
