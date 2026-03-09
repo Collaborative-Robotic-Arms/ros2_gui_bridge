@@ -126,9 +126,10 @@ class AssemblyAllocator(Node):
                 sup_brick.pickup_pose = gui_brick.pickup_pose 
                 sup_brick.place_pose = gui_brick.place_pose 
 
-                sup_brick.start_side = "ABB" if gui_brick.location == 0 else "AR4"
+                sup_brick.start_side = "ABB" if gui_brick.location == 1 else "AR4"
                 sup_brick.target_side = "SHARED"
-                
+                self.get_logger().info(
+                    f"Planning Brick ID {sup_brick.id}: type={sup_brick.type},")
                 final_plan.append(sup_brick)
 
             response.plan = final_plan
@@ -144,13 +145,17 @@ class AssemblyAllocator(Node):
             self.get_logger().warn("Waiting for TF: camera → base_link")
             self.update_ready_status(False)
             return
+        
         if not self.required_assembly or not self.available_supply:
+            self.get_logger().info("Waiting for GUI requirements or camera supply...")
             self.update_ready_status(False)
             return
 
         supply_pool = list(self.available_supply)
         temp_plan = [] 
         all_matched = True
+        
+        self.get_logger().info(f"Starting validation: {len(self.required_assembly)} bricks required, {len(supply_pool)} available.")
 
         for gui_target in self.required_assembly:
             target = GuiBrick()
@@ -161,70 +166,66 @@ class AssemblyAllocator(Node):
             target_enum_type = self.map_gui_str_to_cam_enum(target.type)
             
             if target_enum_type is None:
+                self.get_logger().error(f"Unknown brick type received from GUI: {target.type}")
                 all_matched = False
                 continue
 
             # --- NEW LOGIC: Determine required side based on X coordinate ---
             required_side = None
-            if target.place_pose.position.x <= 0.585:
-                required_side = CamBrick.ABB
-            elif target.place_pose.position.x >= 0.675:
-                required_side = CamBrick.AR4
-            else:
-                # This is the "Dead Zone" between 0.585 and 0.675
-                self.get_logger().error(
-                    f"UNABLE TO REACH BRICK: Target X {target.place_pose.position.x} is in the dead zone!"
-                )
-                all_matched = False
-                continue 
-            # ----------------------------------------------------------------
+            target_x = target.place_pose.position.x
+            
+            # if target_x <= 0.585:
+            #     required_side = CamBrick.ABB
+            # elif target_x >= 0.675:
+            #     required_side = CamBrick.AR4
+            # else:
+            #     self.get_logger().error(
+            #         f"UNABLE TO REACH BRICK: Target X {target_x:.3f} is in the dead zone (0.585 - 0.675)!"
+            #     )
+            #     all_matched = False
+            #     continue 
 
             for idx, source in enumerate(supply_pool):
-                # Match Type AND Side (if side requirement exists)
                 type_matches = (source.type == target_enum_type)
                 side_matches = (required_side is None or source.side == required_side)
-                self.get_logger().info(f"Checking Camera Brick ID {source.id} (Type {source.type}, Side {source.side}) against GUI Target Type {target_enum_type} requiring side {required_side}")
+
                 if type_matches and side_matches:
                     target.id = str(source.id)   
-
                     abb_pose = self.transform_pose_to_abb(source)
 
-                    self.get_logger().info(f"abb pose: position x={abb_pose.position.x}, y={abb_pose.position.y}")
                     if abb_pose is None:
+                        self.get_logger().error(f"TF Transform failed for brick ID: {source.id}")
                         all_matched = False
                         break
                     
                     target.pickup_pose = abb_pose
+                    target.location = 0 if source.side == CamBrick.ABB else 1
 
-                    # Map side back to location integer for the internal plan
-                    if source.side == CamBrick.ABB:
-                        target.location = 0
-                    elif source.side == CamBrick.AR4:
-                        target.location = 1
-
-                    # self.get_logger().info(f"MATCH FOUND: GUI Target {target.type} at X={target.place_pose.position.x} matched with Camera Brick ID {source.id} on side {source.side}")
                     temp_plan.append(target)
                     supply_pool.pop(idx)
                     match_found = True
+                    self.get_logger().debug(f"Matched {target.type} (ID: {target.id}) for Side: {target.location}")
                     break
 
             if not match_found:
-                # If no brick matches both type and the X-zone requirement
-                self.get_logger().info(f"No match for GUI Target: Type {target.type} at X={target.place_pose.position.x}")
+                self.get_logger().warn(f"No match found for {target.type} on required side {required_side}")
                 all_matched = False
 
-        # System is only ready if EVERY brick from the GUI has a physical match
         is_ready_now = all_matched and (len(temp_plan) == len(self.required_assembly))
-        self.update_ready_status(is_ready_now)
-        if self.is_ready:
+        
+        if is_ready_now:
+            self.get_logger().info(f"Plan validated successfully with {len(temp_plan)} bricks.")
             self.latest_valid_plan = temp_plan
             for brick in self.latest_valid_plan:
                 ps = PoseStamped()
                 ps.header.stamp = self.get_clock().now().to_msg()
-                ps.header.frame_id = 'base_link'  # Make sure this matches your robot/world frame
+                ps.header.frame_id = 'base_link'
                 ps.pose = brick.place_pose
                 self.place_pose_pub.publish(ps)
+        else:
+            self.get_logger().warn("Validation failed: Physical supply does not match GUI requirements.")
 
+        self.update_ready_status(is_ready_now)
     def update_ready_status(self, status):
         """Publishes the ready flag for debugging."""
         self.is_ready = status

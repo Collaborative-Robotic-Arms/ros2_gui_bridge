@@ -17,10 +17,11 @@ WORLD_X_OFFSET = 0.51
 WORLD_Y_OFFSET = -0.12
 
 ORIENTATION_MAP = {
-    "default": -45, "horizontal": 90,
-    "rotated": 45, "vertical": 0,
-    "inverted": 135, "upside_down": 180,
-    "flipped": 270, "left": 270
+    "l_default": -45, "i_horizontal": 90,
+    "l_rotated": 45, "i_vertical": 0,
+    "l_inverted": 135, "l_flipped": 270, 
+    "t_default": 0, "t_rotated": 90, 
+    "t_inverted": 180, "t_flipped": 270
 }
 
 # =========================
