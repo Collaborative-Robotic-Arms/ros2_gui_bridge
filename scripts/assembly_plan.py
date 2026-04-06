@@ -24,6 +24,9 @@ from geometry_msgs.msg import Pose,PoseStamped
 class AssemblyAllocator(Node):
     def __init__(self):
         super().__init__('assembly_allocator')
+
+        self.declare_parameter('use_sim', True)
+        self.use_sim = self.get_parameter('use_sim').value
         
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -75,6 +78,21 @@ class AssemblyAllocator(Node):
     def transform_pose_to_abb(self, cam_brick):
         if not self.tf_ready:
             return None
+        
+        if self.use_sim:
+            sim_pose = Pose()
+            # We use your exact hardware offsets for the simulation table
+            sim_pose.position.x = cam_brick.pose.position.y + 0.67
+            sim_pose.position.y = cam_brick.pose.position.x + 0.01
+            sim_pose.position.z = cam_brick.pose.position.z
+            
+            # Hardcode orientation to point the gripper down for Gazebo stability
+            sim_pose.orientation.x = 0.0
+            sim_pose.orientation.y = 1.0
+            sim_pose.orientation.z = 0.0
+            sim_pose.orientation.w = 0.0
+            return sim_pose
+        
         try:
             pose_stamped = PoseStamped()
             pose_stamped.header.frame_id = 'camera'
@@ -126,7 +144,7 @@ class AssemblyAllocator(Node):
                 sup_brick.pickup_pose = gui_brick.pickup_pose 
                 sup_brick.place_pose = gui_brick.place_pose 
 
-                sup_brick.start_side = "ABB" if gui_brick.location == 1 else "AR4"
+                sup_brick.start_side = "ABB" if gui_brick.location == 0 else "AR4"
                 sup_brick.target_side = "SHARED"
                 self.get_logger().info(
                     f"Planning Brick ID {sup_brick.id}: type={sup_brick.type},")

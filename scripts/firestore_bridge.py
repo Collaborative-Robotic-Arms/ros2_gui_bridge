@@ -11,7 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 
 # --- CONFIGURATION ---
 # The script will look for this filename in the package 'share' folder
-CRED_FILENAME = 'collaborative-robotic-ar-d147a-firebase-adminsdk-fbsvc-328d0d1f4e.json'
+CRED_FILENAME = 'collaborative-robotic-ar-d147a-firebase-adminsdk-fbsvc-b399a1ae6e.json'
 COLLECTION_NAME = 'shapes' 
 
 def firestore_serializer(obj):

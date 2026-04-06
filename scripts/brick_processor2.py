@@ -13,8 +13,6 @@ import json
 CELL_SIZE = 0.03
 Z_HEIGHT = 0.026
 
-WORLD_X_OFFSET = 0.51
-WORLD_Y_OFFSET = -0.12
 
 ORIENTATION_MAP = {
     "l_default": -45, "i_horizontal": 90,
@@ -75,6 +73,19 @@ class BrickProcessor(Node):
     def __init__(self):
         super().__init__('brick_processor')
 
+        self.declare_parameter('use_sim', True)
+        self.use_sim = self.get_parameter('use_sim').value
+        
+        # Set Offsets based on the mode
+        if self.use_sim:
+            self.world_x_offset = 0.453
+            self.world_y_offset = -0.12
+            self.get_logger().info('--- BRICK PROCESSOR READY (SIMULATION MODE) ---')
+        else:
+            self.world_x_offset = 0.51
+            self.world_y_offset = -0.12
+            self.get_logger().info('--- BRICK PROCESSOR READY (HARDWARE MODE) ---')
+
         self.sub = self.create_subscription(
             String, '/incoming_bricks', self.listener_callback, 10
         )
@@ -86,12 +97,15 @@ class BrickProcessor(Node):
 
     def grid_to_world(self, row, col , brick_type):
         center_offset = CELL_SIZE / 2.0
-        world_x = WORLD_X_OFFSET + (row * CELL_SIZE) + center_offset
-        world_y = WORLD_Y_OFFSET + (col * CELL_SIZE) + center_offset
+        
+        # Using the dynamic self.world_x_offset and self.world_y_offset
+        world_x = self.world_x_offset + (row * CELL_SIZE) + center_offset
+        world_y = self.world_y_offset + (col * CELL_SIZE) + center_offset
 
         if brick_type.upper() == 'L_SHAPE':
-            world_x = WORLD_X_OFFSET + (row * CELL_SIZE) 
-            world_y = WORLD_Y_OFFSET + (col * CELL_SIZE)
+            world_x = self.world_x_offset + (row * CELL_SIZE) 
+            world_y = self.world_y_offset + (col * CELL_SIZE)
+            
         return world_x, world_y
 
     def get_quaternion_from_euler(self, yaw_degrees):
