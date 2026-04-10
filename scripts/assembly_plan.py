@@ -34,7 +34,6 @@ class AssemblyAllocator(Node):
         # self.tf_check_timer = self.create_timer(0.5, self.check_tf_ready)
         self.place_pose_pub = self.create_publisher(PoseStamped, '/debug/place_pose', 10)
 
-
         # --- INPUTS ---
         # Subscribes to the Brick Processor (GUI World Coords)
         self.gui_sub = self.create_subscription(
@@ -60,6 +59,9 @@ class AssemblyAllocator(Node):
         self.available_supply = []     # Bricks from Camera
         self.latest_valid_plan = []    # Matched plan ready for supervisor
         self.is_ready = False
+        
+        # --- NEW: Track if the plan has already been published ---
+        self.plan_published = False 
         
         # Matching Timer: runs at 2Hz
         self.timer = self.create_timer(0.5, self.validate_and_assign)
@@ -97,24 +99,10 @@ class AssemblyAllocator(Node):
             pose_stamped = PoseStamped()
             pose_stamped.header.frame_id = 'camera'
             pose_stamped.header.stamp = cam_brick.header.stamp
-            # pose_stamped.pose = cam_brick.pose
 
-            # self.get_logger().info(f"Incoming brick pose: position x={cam_brick.pose.position.x}, y={cam_brick.pose.position.y}")
-            # t = self.tf_buffer.lookup_transform(
-            #     'base_link',
-            #     'camera',
-            #     rclpy.time.Time()
-            # )
             pose_stamped.pose.position.x = cam_brick.pose.position.y + 0.674
             pose_stamped.pose.position.y = cam_brick.pose.position.x + 0.033
-
             pose_stamped.pose.orientation = cam_brick.pose.orientation
-
-            # self.get_logger().info(f"Processed brick pose: position x={pose_stamped.pose.position.x}, y={pose_stamped.pose.position.y}")
-            
-            # transformed = tf2_geometry_msgs.do_transform_pose_stamped(
-            #     pose_stamped, t
-            # )
 
             return pose_stamped.pose
 
@@ -126,6 +114,8 @@ class AssemblyAllocator(Node):
     def gui_callback(self, msg):
         """Stores the list of bricks requested by the GUI."""
         self.required_assembly = msg.bricks
+        # --- NEW: Reset the publisher flag because we have a new request ---
+        self.plan_published = False 
 
     def cam_callback(self, msg):
         """Stores the list of bricks currently detected by the camera."""
@@ -153,8 +143,8 @@ class AssemblyAllocator(Node):
             response.plan = final_plan
             response.success = True
         else:
-                self.get_logger().warn("Supervisor requested plan but system is NOT READY")
-                response.success = False
+            self.get_logger().warn("Supervisor requested plan but system is NOT READY")
+            response.success = False
         return response
 
     def validate_and_assign(self):
@@ -165,7 +155,8 @@ class AssemblyAllocator(Node):
             return
         
         if not self.required_assembly or not self.available_supply:
-            self.get_logger().info("Waiting for GUI requirements or camera supply...")
+            # Added throttle to prevent console spam
+            self.get_logger().info("Waiting for GUI requirements or camera supply...", throttle_duration_sec=5.0)
             self.update_ready_status(False)
             return
 
@@ -173,7 +164,9 @@ class AssemblyAllocator(Node):
         temp_plan = [] 
         all_matched = True
         
-        self.get_logger().info(f"Starting validation: {len(self.required_assembly)} bricks required, {len(supply_pool)} available.")
+        # Only log starting validation if we haven't already published the plan
+        if not self.plan_published:
+            self.get_logger().info(f"Starting validation: {len(self.required_assembly)} bricks required, {len(supply_pool)} available.")
 
         for gui_target in self.required_assembly:
             target = GuiBrick()
@@ -188,20 +181,8 @@ class AssemblyAllocator(Node):
                 all_matched = False
                 continue
 
-            # --- NEW LOGIC: Determine required side based on X coordinate ---
             required_side = None
             target_x = target.place_pose.position.x
-            
-            # if target_x <= 0.585:
-            #     required_side = CamBrick.ABB
-            # elif target_x >= 0.675:
-            #     required_side = CamBrick.AR4
-            # else:
-            #     self.get_logger().error(
-            #         f"UNABLE TO REACH BRICK: Target X {target_x:.3f} is in the dead zone (0.585 - 0.675)!"
-            #     )
-            #     all_matched = False
-            #     continue 
 
             for idx, source in enumerate(supply_pool):
                 type_matches = (source.type == target_enum_type)
@@ -222,28 +203,40 @@ class AssemblyAllocator(Node):
                     temp_plan.append(target)
                     supply_pool.pop(idx)
                     match_found = True
-                    self.get_logger().debug(f"Matched {target.type} (ID: {target.id}) for Side: {target.location}")
+                    if not self.plan_published:
+                        self.get_logger().debug(f"Matched {target.type} (ID: {target.id}) for Side: {target.location}")
                     break
 
             if not match_found:
-                self.get_logger().warn(f"No match found for {target.type} on required side {required_side}")
+                if not self.plan_published:
+                    self.get_logger().warn(f"No match found for {target.type} on required side {required_side}")
                 all_matched = False
 
         is_ready_now = all_matched and (len(temp_plan) == len(self.required_assembly))
         
         if is_ready_now:
-            self.get_logger().info(f"Plan validated successfully with {len(temp_plan)} bricks.")
             self.latest_valid_plan = temp_plan
-            for brick in self.latest_valid_plan:
-                ps = PoseStamped()
-                ps.header.stamp = self.get_clock().now().to_msg()
-                ps.header.frame_id = 'base_link'
-                ps.pose = brick.place_pose
-                self.place_pose_pub.publish(ps)
+            
+            # --- NEW: Only publish if we haven't already! ---
+            if not self.plan_published:
+                self.get_logger().info(f"Plan validated successfully with {len(temp_plan)} bricks. Publishing plan ONCE.")
+                for brick in self.latest_valid_plan:
+                    ps = PoseStamped()
+                    ps.header.stamp = self.get_clock().now().to_msg()
+                    ps.header.frame_id = 'base_link'
+                    ps.pose = brick.place_pose
+                    self.place_pose_pub.publish(ps)
+                
+                # Lock the publisher so it doesn't spam
+                self.plan_published = True 
         else:
-            self.get_logger().warn("Validation failed: Physical supply does not match GUI requirements.")
+            if self.required_assembly and self.available_supply:
+                self.get_logger().warn("Validation failed: Physical supply does not match GUI requirements.", throttle_duration_sec=5.0)
+            # If the supply breaks (e.g., someone bumps the table), reset the flag 
+            self.plan_published = False
 
         self.update_ready_status(is_ready_now)
+
     def update_ready_status(self, status):
         """Publishes the ready flag for debugging."""
         self.is_ready = status

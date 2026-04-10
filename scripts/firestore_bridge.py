@@ -22,6 +22,10 @@ class FirestoreToROS(Node):
     def __init__(self):
         super().__init__('firestore_bridge_node')
         self.publisher_ = self.create_publisher(String, '/incoming_bricks', 10)
+        
+        # --- NEW: Flag to ignore the historical database load ---
+        self.initial_load_complete = False 
+        
         self.get_logger().info('--- FIRESTORE BRIDGE STARTING ---')
 
         # DYNAMIC PATH: Finds the key in the installed 'share' directory
@@ -58,6 +62,12 @@ class FirestoreToROS(Node):
             self.get_logger().error(f"Listener Error: {e}")
 
     def on_update(self, col_snapshot, changes, read_time):
+        # --- NEW: Ignore the first snapshot containing all history ---
+        if not self.initial_load_complete:
+            self.get_logger().info("Skipping historical database entries. Waiting for NEW bricks...")
+            self.initial_load_complete = True
+            return
+
         for change in changes:
             if change.type.name in ['ADDED', 'MODIFIED']:
                 full_doc = change.document.to_dict()

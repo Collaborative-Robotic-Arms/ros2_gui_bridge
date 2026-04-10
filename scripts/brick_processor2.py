@@ -15,8 +15,8 @@ Z_HEIGHT = 0.026
 
 
 ORIENTATION_MAP = {
-    "l_default": -45, "i_horizontal": 90,
-    "l_rotated": 45, "i_vertical": 0,
+    "l_default": -45, "i_horizontal": 0,
+    "l_rotated": 45, "i_vertical": 90,
     "l_inverted": 135, "l_flipped": 270, 
     "t_default": 0, "t_rotated": 90, 
     "t_inverted": 180, "t_flipped": 270
