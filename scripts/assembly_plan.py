@@ -32,7 +32,7 @@ class AssemblyAllocator(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_ready = True
         self.plan_finalized = False 
-        self.table_split_x = 0.453 # Define the X-coordinate that splits the table for side selection       
+        self.table_split_x = 0.573 # Define the X-coordinate that splits the table for side selection       
         self.place_pose_pub = self.create_publisher(PoseStamped, '/debug/place_pose', 10)
         
         # --- INPUTS ---
