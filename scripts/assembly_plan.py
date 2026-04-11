@@ -31,9 +31,10 @@ class AssemblyAllocator(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_ready = True
-        # self.tf_check_timer = self.create_timer(0.5, self.check_tf_ready)
+        self.plan_finalized = False 
+        self.table_split_x = 0.453 # Define the X-coordinate that splits the table for side selection       
         self.place_pose_pub = self.create_publisher(PoseStamped, '/debug/place_pose', 10)
-
+        
         # --- INPUTS ---
         # Subscribes to the Brick Processor (GUI World Coords)
         self.gui_sub = self.create_subscription(
@@ -116,28 +117,47 @@ class AssemblyAllocator(Node):
         self.required_assembly = msg.bricks
         # --- NEW: Reset the publisher flag because we have a new request ---
         self.plan_published = False 
+        self.plan_finalized = False 
+        self.latest_valid_plan = []     # Wipe the old plan from memory immediately
+        self.update_ready_status(False)
+        self.get_logger().info("Received new GUI requirements. Unlocking planner and evaluating...")
 
     def cam_callback(self, msg):
         """Stores the list of bricks currently detected by the camera."""
-        self.available_supply = msg.bricks
+        if not self.plan_finalized:
+            self.available_supply = msg.bricks
+        
 
     def handle_plan_request(self, request, response):
         if self.is_ready and self.latest_valid_plan:
             final_plan = []
+            
+            # Same threshold used in validate_and_assign
+
             for gui_brick in self.latest_valid_plan:
                 sup_brick = SupervisorBrick()
                 
                 sup_brick.id = int(gui_brick.id)
                 sup_brick.type = str(gui_brick.type)
                 
-                # Use the full Pose objects stored during validate_and_assign
                 sup_brick.pickup_pose = gui_brick.pickup_pose 
                 sup_brick.place_pose = gui_brick.place_pose 
 
+                # Where the brick physically is right now
                 sup_brick.start_side = "ABB" if gui_brick.location == 0 else "AR4"
-                sup_brick.target_side = "SHARED"
-                self.get_logger().info(
-                    f"Planning Brick ID {sup_brick.id}: type={sup_brick.type},")
+                
+                # Where the brick needs to end up based on GUI placement
+                if sup_brick.place_pose.position.x < self.table_split_x:  # <-- Updated
+                    sup_brick.target_side = "ABB"
+                else:
+                    sup_brick.target_side = "AR4"
+
+                # Log the logic so you can debug handovers easily
+                if sup_brick.start_side != sup_brick.target_side:
+                    self.get_logger().info(f"HANDOVER REQUIRED for Brick ID {sup_brick.id}: {sup_brick.start_side} -> {sup_brick.target_side}")
+                else:
+                    self.get_logger().info(f"DIRECT PLACE for Brick ID {sup_brick.id}: {sup_brick.start_side} -> {sup_brick.target_side}")
+
                 final_plan.append(sup_brick)
 
             response.plan = final_plan
@@ -148,14 +168,16 @@ class AssemblyAllocator(Node):
         return response
 
     def validate_and_assign(self):
-        """Matches GUI requirements with Camera reality based on Type and X-coordinate zones."""
+        """Matches GUI requirements with Camera reality based on Type and Placement Side."""
+        if self.plan_finalized:
+            self.update_ready_status(True)
+            return
         if not self.tf_ready:
             self.get_logger().warn("Waiting for TF: camera → base_link")
             self.update_ready_status(False)
             return
         
         if not self.required_assembly or not self.available_supply:
-            # Added throttle to prevent console spam
             self.get_logger().info("Waiting for GUI requirements or camera supply...", throttle_duration_sec=5.0)
             self.update_ready_status(False)
             return
@@ -164,7 +186,7 @@ class AssemblyAllocator(Node):
         temp_plan = [] 
         all_matched = True
         
-        # Only log starting validation if we haven't already published the plan
+
         if not self.plan_published:
             self.get_logger().info(f"Starting validation: {len(self.required_assembly)} bricks required, {len(supply_pool)} available.")
 
@@ -173,51 +195,65 @@ class AssemblyAllocator(Node):
             target.type = gui_target.type
             target.place_pose = gui_target.place_pose
 
-            match_found = False
             target_enum_type = self.map_gui_str_to_cam_enum(target.type)
-            
             if target_enum_type is None:
                 self.get_logger().error(f"Unknown brick type received from GUI: {target.type}")
                 all_matched = False
                 continue
 
-            required_side = None
-            target_x = target.place_pose.position.x
+            # 1. Determine which side we WANT to pick from based on placement location
+            if target.place_pose.position.x < self.table_split_x:  # <-- Updated
+                desired_pick_side = CamBrick.ABB
+            else:
+                desired_pick_side = CamBrick.AR4
 
+            best_source = None
+            best_idx = -1
+
+            # PASS 1: Look for an ideal match (Correct Type + Correct Side)
             for idx, source in enumerate(supply_pool):
-                type_matches = (source.type == target_enum_type)
-                side_matches = (required_side is None or source.side == required_side)
-
-                if type_matches and side_matches:
-                    target.id = str(source.id)   
-                    abb_pose = self.transform_pose_to_abb(source)
-
-                    if abb_pose is None:
-                        self.get_logger().error(f"TF Transform failed for brick ID: {source.id}")
-                        all_matched = False
-                        break
-                    
-                    target.pickup_pose = abb_pose
-                    target.location = 0 if source.side == CamBrick.ABB else 1
-
-                    temp_plan.append(target)
-                    supply_pool.pop(idx)
-                    match_found = True
-                    if not self.plan_published:
-                        self.get_logger().debug(f"Matched {target.type} (ID: {target.id}) for Side: {target.location}")
+                if source.type == target_enum_type and source.side == desired_pick_side:
+                    best_source = source
+                    best_idx = idx
                     break
 
-            if not match_found:
+            # PASS 2: If no ideal match, look for ANY match (This triggers Handover)
+            if best_source is None:
+                for idx, source in enumerate(supply_pool):
+                    if source.type == target_enum_type:
+                        best_source = source
+                        best_idx = idx
+                        break
+
+            # Process the found match
+            if best_source is not None:
+                target.id = str(best_source.id)   
+                abb_pose = self.transform_pose_to_abb(best_source)
+
+                if abb_pose is None:
+                    self.get_logger().error(f"TF Transform failed for brick ID: {best_source.id}")
+                    all_matched = False
+                    break
+                
+                target.pickup_pose = abb_pose
+                # We store the physical start location (0 for ABB, 1 for AR4)
+                target.location = 0 if best_source.side == CamBrick.ABB else 1
+
+                temp_plan.append(target)
+                supply_pool.pop(best_idx) # Remove from pool so we don't pick it twice
+                
                 if not self.plan_published:
-                    self.get_logger().warn(f"No match found for {target.type} on required side {required_side}")
+                    self.get_logger().debug(f"Matched {target.type} (ID: {target.id}) starting at Side: {target.location}")
+            else:
+                if not self.plan_published:
+                    side_str = "ABB" if desired_pick_side == CamBrick.ABB else "AR4"
+                    self.get_logger().warn(f"No match found for {target.type} anywhere! (Preferred: {side_str})")
                 all_matched = False
 
         is_ready_now = all_matched and (len(temp_plan) == len(self.required_assembly))
         
         if is_ready_now:
             self.latest_valid_plan = temp_plan
-            
-            # --- NEW: Only publish if we haven't already! ---
             if not self.plan_published:
                 self.get_logger().info(f"Plan validated successfully with {len(temp_plan)} bricks. Publishing plan ONCE.")
                 for brick in self.latest_valid_plan:
@@ -227,12 +263,12 @@ class AssemblyAllocator(Node):
                     ps.pose = brick.place_pose
                     self.place_pose_pub.publish(ps)
                 
-                # Lock the publisher so it doesn't spam
                 self.plan_published = True 
+                # LOCK THE PLANNER SO IT STOPS LOOKING AT THE CAMERA
+                self.plan_finalized = True
         else:
             if self.required_assembly and self.available_supply:
                 self.get_logger().warn("Validation failed: Physical supply does not match GUI requirements.", throttle_duration_sec=5.0)
-            # If the supply breaks (e.g., someone bumps the table), reset the flag 
             self.plan_published = False
 
         self.update_ready_status(is_ready_now)
