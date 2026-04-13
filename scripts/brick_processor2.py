@@ -19,7 +19,9 @@ ORIENTATION_MAP = {
     "l_rotated": 45, "i_vertical": 90,
     "l_inverted": 135, "l_flipped": 270, 
     "t_default": 0, "t_rotated": 90, 
-    "t_inverted": 180, "t_flipped": 270
+    "t_inverted": 180, "t_flipped": 270,
+    "z_default": 0, "z_rotated": 90,       
+    "z_inverted": 180, "z_flipped": 270   
 }
 
 # =========================
@@ -207,6 +209,10 @@ class BrickProcessor(Node):
                         r_cent, c_cent = l_brick_bounding_center(cells)
                         source = 'L bounding box center'
 
+                    elif brick_type == 'Z_SHAPE':
+                        r_cent, c_cent = centroid_from_cells(cells)
+                        source = 'Z centroid'
+                        
                     else:
                         r_cent, c_cent = centroid_from_cells(cells)
                         source = 'default centroid'
