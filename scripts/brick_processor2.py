@@ -84,8 +84,8 @@ class BrickProcessor(Node):
             self.world_y_offset = -0.12
             self.get_logger().info('--- BRICK PROCESSOR READY (SIMULATION MODE) ---')
         else:
-            self.world_x_offset = 0.51
-            self.world_y_offset = -0.12
+            self.world_x_offset = 0.518
+            self.world_y_offset = -0.113
             self.get_logger().info('--- BRICK PROCESSOR READY (HARDWARE MODE) ---')
 
         self.sub = self.create_subscription(
