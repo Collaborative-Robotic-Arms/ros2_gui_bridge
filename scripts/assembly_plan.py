@@ -63,6 +63,7 @@ class AssemblyAllocator(Node):
         
         # --- NEW: Track if the plan has already been published ---
         self.plan_published = False 
+        self.has_logged_service_call = False # <-- ADD THIS LINE
         
         # Matching Timer: runs at 2Hz
         self.timer = self.create_timer(0.5, self.validate_and_assign)
@@ -89,11 +90,13 @@ class AssemblyAllocator(Node):
             sim_pose.position.y = cam_brick.pose.position.x + 0.01
             sim_pose.position.z = cam_brick.pose.position.z
             
-            # Hardcode orientation to point the gripper down for Gazebo stability
-            sim_pose.orientation.x = 0.0
-            sim_pose.orientation.y = 1.0
-            sim_pose.orientation.z = 0.0
-            sim_pose.orientation.w = 0.0
+            # Preserve the detected brick's orientation from camera for adaptive rotation
+            sim_pose.orientation = cam_brick.pose.orientation
+            # OLD CODE (commented out):
+            # sim_pose.orientation.x = 0.0
+            # sim_pose.orientation.y = 1.0
+            # sim_pose.orientation.z = 0.0
+            # sim_pose.orientation.w = 0.0
             return sim_pose
         
         try:
@@ -117,6 +120,7 @@ class AssemblyAllocator(Node):
         self.required_assembly = msg.bricks
         # --- NEW: Reset the publisher flag because we have a new request ---
         self.plan_published = False 
+        self.has_logged_service_call = False # <-- ADD THIS LINE
         self.plan_finalized = False 
         self.latest_valid_plan = []     # Wipe the old plan from memory immediately
         self.update_ready_status(False)
@@ -152,14 +156,16 @@ class AssemblyAllocator(Node):
                 else:
                     sup_brick.target_side = "AR4"
 
-                # Log the logic so you can debug handovers easily
-                if sup_brick.start_side != sup_brick.target_side:
-                    self.get_logger().info(f"HANDOVER REQUIRED for Brick ID {sup_brick.id}: {sup_brick.start_side} -> {sup_brick.target_side}")
-                else:
-                    self.get_logger().info(f"DIRECT PLACE for Brick ID {sup_brick.id}: {sup_brick.start_side} -> {sup_brick.target_side}")
+                # Wrap the logging in our new flag
+                if not self.has_logged_service_call:
+                    if sup_brick.start_side != sup_brick.target_side:
+                        self.get_logger().info(f"HANDOVER REQUIRED for Brick ID {sup_brick.id}: {sup_brick.start_side} -> {sup_brick.target_side}")
+                    else:
+                        self.get_logger().info(f"DIRECT PLACE for Brick ID {sup_brick.id}: {sup_brick.start_side} -> {sup_brick.target_side}")
 
                 final_plan.append(sup_brick)
 
+            self.has_logged_service_call = True # Prevent future spam
             response.plan = final_plan
             response.success = True
         else:

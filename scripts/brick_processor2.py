@@ -15,9 +15,9 @@ Z_HEIGHT = 0.026
 
 
 ORIENTATION_MAP = {
-    "l_default": -45, "i_horizontal": 0,
-    "l_rotated": 45, "i_vertical": 90,
-    "l_inverted": 135, "l_flipped": 270, 
+    "l_default":45, "i_horizontal": 0,
+    "l_rotated": 135, "i_vertical": 90,
+    "l_inverted": 225, "l_flipped": 315, 
     "t_default": 0, "t_rotated": 90, 
     "t_inverted": 180, "t_flipped": 270,
     "z_default": 0, "z_rotated": 90,       
@@ -52,20 +52,29 @@ def t_brick_anchor(cells):
 
     raise ValueError("Invalid T brick: no junction cell found")
 
-def l_brick_bounding_center(cells):
+def l_brick_corner_cell(cells):
     """
-    Center of the bounding rectangle treating the L as a full rectangle.
+    Returns the corner cell of an L brick.
+    The corner is the cell with exactly 2 neighbors that are perpendicular to each other.
+    This provides a rotation-invariant anchor point regardless of L brick orientation.
     """
-    rows = [c['row'] for c in cells]
-    cols = [c['col'] for c in cells]
-
-    min_r, max_r = min(rows), max(rows)
-    min_c, max_c = min(cols), max(cols)
-
-    center_row = (min_r + max_r + 1) / 2
-    center_col = (min_c + max_c + 1) / 2
-
-    return center_row, center_col
+    cell_set = {(c['row'], c['col']) for c in cells}
+    
+    for cell in cell_set:
+        r, c = cell
+        neighbors = []
+        for dr, dc in [(1,0), (-1,0), (0,1), (0,-1)]:
+            if (r + dr, c + dc) in cell_set:
+                neighbors.append((dr, dc))
+        
+        # Corner cell has exactly 2 neighbors in perpendicular directions
+        if len(neighbors) == 2:
+            # Check if perpendicular: one has dr != 0, other has dc != 0
+            if (neighbors[0][0] != 0 and neighbors[1][1] != 0) or \
+               (neighbors[0][1] != 0 and neighbors[1][0] != 0):
+                return cell
+    
+    raise ValueError("Invalid L brick: no clear corner cell found")
 
 # =========================
 # ROS Node
@@ -84,8 +93,8 @@ class BrickProcessor(Node):
             self.world_y_offset = -0.12
             self.get_logger().info('--- BRICK PROCESSOR READY (SIMULATION MODE) ---')
         else:
-            self.world_x_offset = 0.518
-            self.world_y_offset = -0.113
+            self.world_x_offset = 0.51
+            self.world_y_offset = -0.14
             self.get_logger().info('--- BRICK PROCESSOR READY (HARDWARE MODE) ---')
 
         self.sub = self.create_subscription(
@@ -104,10 +113,6 @@ class BrickProcessor(Node):
         world_x = self.world_x_offset + (row * CELL_SIZE) + center_offset
         world_y = self.world_y_offset + (col * CELL_SIZE) + center_offset
 
-        if brick_type.upper() == 'L_SHAPE':
-            world_x = self.world_x_offset + (row * CELL_SIZE) 
-            world_y = self.world_y_offset + (col * CELL_SIZE)
-            
         return world_x, world_y
 
     def get_quaternion_from_euler(self, yaw_degrees):
@@ -206,8 +211,8 @@ class BrickProcessor(Node):
                         source = 'T junction cell'
 
                     elif brick_type == 'L_SHAPE':
-                        r_cent, c_cent = l_brick_bounding_center(cells)
-                        source = 'L bounding box center'
+                        r_cent, c_cent = l_brick_corner_cell(cells)
+                        source = 'L corner cell (rotation-invariant)'
 
                     elif brick_type == 'Z_SHAPE':
                         r_cent, c_cent = centroid_from_cells(cells)
